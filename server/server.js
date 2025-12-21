@@ -35,18 +35,24 @@ const normalizeUsername = (username) => {
     return trimmed.slice(0, 32)
 }
 
+const removeUserFromDocument = (documentID, socketId) => {
+    if (!documentID) return
+    const document = documents.get(documentID)
+    if (!document) return
+
+    document.users.delete(socketId)
+    io.to(documentID).emit("document-users", toUserList(document))
+
+    if (document.users.size === 0) {
+        documents.delete(documentID)
+    }
+}
+
 io.on("connection", socket => {
     socket.on("get-document", documentID => {
         const previousDocumentID = socket.data.documentID
         if (previousDocumentID && previousDocumentID !== documentID) {
-            const previousDocument = documents.get(previousDocumentID)
-            if (previousDocument) {
-                previousDocument.users.delete(socket.id)
-                io.to(previousDocumentID).emit("document-users", toUserList(previousDocument))
-                if (previousDocument.users.size === 0) {
-                    documents.delete(previousDocumentID)
-                }
-            }
+            removeUserFromDocument(previousDocumentID, socket.id)
             socket.leave(previousDocumentID)
         }
 
@@ -84,17 +90,20 @@ io.on("connection", socket => {
         io.to(documentID).emit("document-users", toUserList(document))
     })
 
-    socket.on("disconnect", () => {
-        const documentID = socket.data.documentID
-        if (!documentID) return
-        const document = documents.get(documentID)
-        if (!document) return
+    socket.on("leave-document", documentID => {
+        const activeDocumentID = socket.data.documentID
+        const targetDocumentID = documentID || activeDocumentID
+        if (!targetDocumentID) return
 
-        document.users.delete(socket.id)
-        io.to(documentID).emit("document-users", toUserList(document))
+        removeUserFromDocument(targetDocumentID, socket.id)
 
-        if (document.users.size === 0) {
-            documents.delete(documentID)
+        if (activeDocumentID === targetDocumentID) {
+            socket.data.documentID = null
         }
+        socket.leave(targetDocumentID)
+    })
+
+    socket.on("disconnect", () => {
+        removeUserFromDocument(socket.data.documentID, socket.id)
     })
 })

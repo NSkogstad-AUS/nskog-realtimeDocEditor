@@ -47,6 +47,14 @@ export default function TextEditor() {
     useEffect(() => {
         if (socket == null) return
 
+        return () => {
+            socket.emit("leave-document", documentID)
+        }
+    }, [socket, documentID])
+
+    useEffect(() => {
+        if (socket == null) return
+
         const handler = (documentUsers) => {
             setUsers(documentUsers)
         }

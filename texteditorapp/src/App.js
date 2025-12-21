@@ -1,22 +1,23 @@
 import TextEditor from "./TextEditor";
 import {
   BrowserRouter as Router,
-  Routes,
   Route,
-  Navigate,
+  Redirect,
+  Switch,
 } from "react-router-dom";
 import { v4 as uuidV4 } from "uuid";
 
 function App() {
   return (
     <Router>
-      <Routes>
+      <Switch>
         <Route
+          exact
           path="/"
-          element={<Navigate replace to={`/documents/${uuidV4()}`} />}
+          render={() => <Redirect to={`/documents/${uuidV4()}`} />}
         />
-        <Route path="/documents/:id" element={<TextEditor />} />
-      </Routes>
+        <Route path="/documents/:id" component={TextEditor} />
+      </Switch>
     </Router>
   );
 }

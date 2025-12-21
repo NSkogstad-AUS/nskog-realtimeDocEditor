@@ -7,6 +7,91 @@ body {
     margin: 0;
 }
 
+:root {
+    --user-bar-bg: #FFFFFF;
+    --user-bar-border: #D9D9D9;
+    --user-pill-bg: #F0F0F0;
+    --user-pill-text: #333333;
+    --user-pill-self-bg: #D7F2E3;
+    --user-pill-self-text: #1A5D3F;
+}
+
+.editor-shell {
+    min-height: 100vh;
+}
+
+.user-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.75rem 1rem;
+    background-color: var(--user-bar-bg);
+    border-bottom: 1px solid var(--user-bar-border);
+    flex-wrap: wrap;
+}
+
+.user-form {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+.user-label {
+    font-weight: 600;
+    font-size: 0.9rem;
+}
+
+.user-form input {
+    padding: 0.4rem 0.6rem;
+    border: 1px solid #CFCFCF;
+    border-radius: 4px;
+    font-size: 0.9rem;
+}
+
+.user-form button {
+    padding: 0.4rem 0.75rem;
+    border: 1px solid #2F2F2F;
+    background: #2F2F2F;
+    color: #FFFFFF;
+    border-radius: 4px;
+    font-size: 0.85rem;
+    cursor: pointer;
+}
+
+.user-form button:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.user-list {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    flex: 1;
+}
+
+.user-pill {
+    padding: 0.25rem 0.6rem;
+    border-radius: 999px;
+    background: var(--user-pill-bg);
+    color: var(--user-pill-text);
+    font-size: 0.8rem;
+}
+
+.user-pill.is-self {
+    background: var(--user-pill-self-bg);
+    color: var(--user-pill-self-text);
+}
+
+.user-empty {
+    font-size: 0.8rem;
+    color: #666666;
+}
+
 .container .ql-editor {
     width: 8.5in;
     min-height: 11in;
@@ -39,6 +124,10 @@ body {
 @media print {
     body {
         background: none;
+    }
+
+    .user-bar {
+        display: none;
     }
     
     .container .ql-editor {

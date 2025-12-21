@@ -20,6 +20,8 @@ export default function TextEditor() {
     const {id: documentID} = useParams()
     const [socket, setSocket] = useState()
     const [quill, setQuill] = useState()
+    const [users, setUsers] = useState([])
+    const [username, setUsername] = useState("")
 
 
     useEffect(() => {
@@ -41,6 +43,19 @@ export default function TextEditor() {
 
         socket.emit("get-document", documentID)
     }, [socket, quill, documentID])
+
+    useEffect(() => {
+        if (socket == null) return
+
+        const handler = (documentUsers) => {
+            setUsers(documentUsers)
+        }
+        socket.on("document-users", handler)
+
+        return () => {
+            socket.off("document-users", handler)
+        }
+    }, [socket])
 
     useEffect(() => {
         if (socket == null || quill == null) return
@@ -70,6 +85,15 @@ export default function TextEditor() {
         }
     }, [socket, quill])
 
+    const handleUsernameSubmit = useCallback((event) => {
+        event.preventDefault()
+        if (socket == null) return
+
+        const trimmed = username.trim()
+        socket.emit("set-username", trimmed)
+        setUsername(trimmed)
+    }, [socket, username])
+
     const wrapperRef = useCallback((wrapper) => {
         if (wrapper == null) return
 
@@ -87,5 +111,42 @@ export default function TextEditor() {
 
         setQuill(q)
     }, [])
-    return <div className="container" ref={wrapperRef}></div>
+    const socketId = socket && socket.id
+
+    return (
+        <div className="editor-shell">
+            <div className="user-bar">
+                <form className="user-form" onSubmit={handleUsernameSubmit}>
+                    <label className="user-label" htmlFor="username-input">Name</label>
+                    <input
+                        id="username-input"
+                        type="text"
+                        value={username}
+                        onChange={(event) => setUsername(event.target.value)}
+                        placeholder="Guest name (optional)"
+                        maxLength={32}
+                    />
+                    <button type="submit" disabled={socket == null}>Set</button>
+                </form>
+                <div className="user-list">
+                    {users.length === 0 ? (
+                        <span className="user-empty">No active users</span>
+                    ) : (
+                        users.map((user) => {
+                            const isSelf = socketId && user.id === socketId
+                            return (
+                                <span
+                                    key={user.id}
+                                    className={`user-pill${isSelf ? " is-self" : ""}`}
+                                >
+                                    {user.displayName}{isSelf ? " (you)" : ""}
+                                </span>
+                            )
+                        })
+                    )}
+                </div>
+            </div>
+            <div className="container" ref={wrapperRef}></div>
+        </div>
+    )
 }

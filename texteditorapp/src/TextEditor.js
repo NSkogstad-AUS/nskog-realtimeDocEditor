@@ -16,16 +16,21 @@ const TOOLBAR_OPTIONS = [
     ["clean"],
 ]
 
+const AUTH_TOKEN_KEY = "doceditor.authToken"
+const AUTH_USERNAME_KEY = "doceditor.username"
+
 export default function TextEditor() {
     const {id: documentID} = useParams()
     const [socket, setSocket] = useState()
     const [quill, setQuill] = useState()
     const [users, setUsers] = useState([])
-    const [username, setUsername] = useState("")
+    const [username, setUsername] = useState(() => localStorage.getItem(AUTH_USERNAME_KEY) || "")
 
 
     useEffect(() => {
-        const s = io("http://localhost:3001")
+        const s = io("http://localhost:3001", {
+            auth: { token: localStorage.getItem(AUTH_TOKEN_KEY) || "" },
+        })
         setSocket(s)
 
         return () => {
@@ -62,6 +67,35 @@ export default function TextEditor() {
 
         return () => {
             socket.off("document-users", handler)
+        }
+    }, [socket])
+
+    useEffect(() => {
+        if (socket == null) return
+
+        const handler = (payload) => {
+            const nextToken = payload && payload.token ? payload.token : ""
+            const nextUsername = payload && payload.username ? payload.username : ""
+
+            if (nextToken) {
+                localStorage.setItem(AUTH_TOKEN_KEY, nextToken)
+            } else {
+                localStorage.removeItem(AUTH_TOKEN_KEY)
+            }
+
+            if (nextUsername) {
+                localStorage.setItem(AUTH_USERNAME_KEY, nextUsername)
+            } else {
+                localStorage.removeItem(AUTH_USERNAME_KEY)
+            }
+
+            setUsername(nextUsername)
+        }
+
+        socket.on("auth-token", handler)
+
+        return () => {
+            socket.off("auth-token", handler)
         }
     }, [socket])
 

@@ -107,6 +107,11 @@ const getUsersCollection = async () => {
     return users
 }
 
+const getUserById = async (users, userId) => {
+    if (!userId || !ObjectId.isValid(userId)) return null
+    return users.findOne({ _id: new ObjectId(userId) })
+}
+
 const removeUserFromDocument = (documentID, socketId) => {
     if (!documentID) return
     const document = documents.get(documentID)
@@ -253,6 +258,110 @@ io.on("connection", socket => {
         } catch (error) {
             console.error("Auth login failed:", error)
             socket.emit("auth-error", { message: "Login failed." })
+        }
+    })
+
+    socket.on("auth-change-password", async (payload = {}) => {
+        if (!socket.data.userId) {
+            socket.emit("auth-error", { message: "Login required." })
+            return
+        }
+
+        const currentPassword = validatePassword(payload.currentPassword)
+        const newPassword = validatePassword(payload.newPassword)
+        if (!currentPassword || !newPassword) {
+            socket.emit("auth-error", {
+                message: "Current and new password required.",
+            })
+            return
+        }
+
+        if (currentPassword === newPassword) {
+            socket.emit("auth-error", {
+                message: "New password must be different.",
+            })
+            return
+        }
+
+        let users
+        try {
+            users = await getUsersCollection()
+        } catch (error) {
+            socket.emit("auth-error", { message: "Database unavailable." })
+            return
+        }
+
+        try {
+            const user = await getUserById(users, socket.data.userId)
+            if (!user) {
+                socket.emit("auth-error", { message: "Account not found." })
+                return
+            }
+
+            const passwordMatches = await bcrypt.compare(
+                currentPassword,
+                user.passwordHash
+            )
+            if (!passwordMatches) {
+                socket.emit("auth-error", { message: "Invalid current password." })
+                return
+            }
+
+            const newHash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS)
+            await users.updateOne(
+                { _id: user._id },
+                { $set: { passwordHash: newHash, passwordUpdatedAt: new Date() } }
+            )
+            socket.emit("auth-success", { message: "Password updated." })
+        } catch (error) {
+            console.error("Auth password change failed:", error)
+            socket.emit("auth-error", { message: "Password update failed." })
+        }
+    })
+
+    socket.on("auth-delete-account", async (payload = {}) => {
+        if (!socket.data.userId) {
+            socket.emit("auth-error", { message: "Login required." })
+            return
+        }
+
+        const password = validatePassword(payload.password)
+        if (!password) {
+            socket.emit("auth-error", { message: "Password required." })
+            return
+        }
+
+        let users
+        try {
+            users = await getUsersCollection()
+        } catch (error) {
+            socket.emit("auth-error", { message: "Database unavailable." })
+            return
+        }
+
+        try {
+            const user = await getUserById(users, socket.data.userId)
+            if (!user) {
+                socket.emit("auth-error", { message: "Account not found." })
+                return
+            }
+
+            const passwordMatches = await bcrypt.compare(password, user.passwordHash)
+            if (!passwordMatches) {
+                socket.emit("auth-error", { message: "Invalid password." })
+                return
+            }
+
+            await users.deleteOne({ _id: user._id })
+            socket.data.username = null
+            socket.data.userId = null
+            socket.data.authToken = null
+            syncUserFromSocket(socket)
+            emitAuthToken(socket, { token: "", username: "", userId: null })
+            socket.emit("auth-success", { message: "Account deleted." })
+        } catch (error) {
+            console.error("Auth delete account failed:", error)
+            socket.emit("auth-error", { message: "Account deletion failed." })
         }
     })
 

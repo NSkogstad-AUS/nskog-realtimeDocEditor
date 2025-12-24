@@ -31,7 +31,15 @@ body {
     flex-wrap: wrap;
 }
 
-.user-form {
+.user-controls {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem 1rem;
+    flex-wrap: wrap;
+}
+
+.user-form,
+.auth-form {
     display: flex;
     align-items: center;
     gap: 0.5rem;
@@ -43,14 +51,16 @@ body {
     font-size: 0.9rem;
 }
 
-.user-form input {
+.user-form input,
+.auth-form input {
     padding: 0.4rem 0.6rem;
     border: 1px solid #CFCFCF;
     border-radius: 4px;
     font-size: 0.9rem;
 }
 
-.user-form button {
+.user-form button,
+.auth-form button {
     padding: 0.4rem 0.75rem;
     border: 1px solid #2F2F2F;
     background: #2F2F2F;
@@ -60,9 +70,23 @@ body {
     cursor: pointer;
 }
 
-.user-form button:disabled {
+.user-form button:disabled,
+.auth-form button:disabled {
     opacity: 0.6;
     cursor: not-allowed;
+}
+
+.auth-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+.auth-error {
+    width: 100%;
+    font-size: 0.8rem;
+    color: #B42318;
 }
 
 .user-list {

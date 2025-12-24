@@ -18,13 +18,18 @@ const TOOLBAR_OPTIONS = [
 
 const AUTH_TOKEN_KEY = "doceditor.authToken"
 const AUTH_USERNAME_KEY = "doceditor.username"
+const MIN_PASSWORD_LENGTH = 8
 
 export default function TextEditor() {
     const {id: documentID} = useParams()
     const [socket, setSocket] = useState()
     const [quill, setQuill] = useState()
     const [users, setUsers] = useState([])
-    const [username, setUsername] = useState(() => localStorage.getItem(AUTH_USERNAME_KEY) || "")
+    const [displayName, setDisplayName] = useState(() => localStorage.getItem(AUTH_USERNAME_KEY) || "")
+    const [loginUsername, setLoginUsername] = useState(() => localStorage.getItem(AUTH_USERNAME_KEY) || "")
+    const [loginPassword, setLoginPassword] = useState("")
+    const [authUserId, setAuthUserId] = useState(null)
+    const [authError, setAuthError] = useState("")
 
 
     useEffect(() => {
@@ -76,6 +81,7 @@ export default function TextEditor() {
         const handler = (payload) => {
             const nextToken = payload && payload.token ? payload.token : ""
             const nextUsername = payload && payload.username ? payload.username : ""
+            const nextUserId = payload && payload.userId ? payload.userId : null
 
             if (nextToken) {
                 localStorage.setItem(AUTH_TOKEN_KEY, nextToken)
@@ -89,13 +95,34 @@ export default function TextEditor() {
                 localStorage.removeItem(AUTH_USERNAME_KEY)
             }
 
-            setUsername(nextUsername)
+            setDisplayName(nextUsername)
+            setLoginUsername(nextUsername)
+            setLoginPassword("")
+            setAuthUserId(nextUserId)
+            setAuthError("")
         }
 
         socket.on("auth-token", handler)
+        socket.emit("auth-status")
 
         return () => {
             socket.off("auth-token", handler)
+        }
+    }, [socket])
+
+    useEffect(() => {
+        if (socket == null) return
+
+        const handler = (payload) => {
+            const message =
+                payload && payload.message ? payload.message : "Authentication failed."
+            setAuthError(message)
+        }
+
+        socket.on("auth-error", handler)
+
+        return () => {
+            socket.off("auth-error", handler)
         }
     }, [socket])
 
@@ -131,10 +158,34 @@ export default function TextEditor() {
         event.preventDefault()
         if (socket == null) return
 
-        const trimmed = username.trim()
+        const trimmed = displayName.trim()
         socket.emit("set-username", trimmed)
-        setUsername(trimmed)
-    }, [socket, username])
+        setDisplayName(trimmed)
+    }, [socket, displayName])
+
+    const handleLoginSubmit = useCallback((event) => {
+        event.preventDefault()
+        if (socket == null) return
+        setAuthError("")
+
+        const trimmed = loginUsername.trim()
+        socket.emit("auth-login", { username: trimmed, password: loginPassword })
+    }, [socket, loginUsername, loginPassword])
+
+    const handleRegister = useCallback((event) => {
+        event.preventDefault()
+        if (socket == null) return
+        setAuthError("")
+
+        const trimmed = loginUsername.trim()
+        socket.emit("auth-register", { username: trimmed, password: loginPassword })
+    }, [socket, loginUsername, loginPassword])
+
+    const handleLogout = useCallback(() => {
+        if (socket == null) return
+        setAuthError("")
+        socket.emit("auth-logout")
+    }, [socket])
 
     const wrapperRef = useCallback((wrapper) => {
         if (wrapper == null) return
@@ -154,22 +205,83 @@ export default function TextEditor() {
         setQuill(q)
     }, [])
     const socketId = socket && socket.id
+    const isAuthenticated = Boolean(authUserId)
+    const authReady =
+        socket != null &&
+        loginUsername.trim().length > 0 &&
+        loginPassword.length >= MIN_PASSWORD_LENGTH
 
     return (
         <div className="editor-shell">
             <div className="user-bar">
-                <form className="user-form" onSubmit={handleUsernameSubmit}>
-                    <label className="user-label" htmlFor="username-input">Name</label>
-                    <input
-                        id="username-input"
-                        type="text"
-                        value={username}
-                        onChange={(event) => setUsername(event.target.value)}
-                        placeholder="Guest name (optional)"
-                        maxLength={32}
-                    />
-                    <button type="submit" disabled={socket == null}>Set</button>
-                </form>
+                <div className="user-controls">
+                    <form className="user-form" onSubmit={handleUsernameSubmit}>
+                        <label className="user-label" htmlFor="username-input">Name</label>
+                        <input
+                            id="username-input"
+                            type="text"
+                            value={displayName}
+                            onChange={(event) => setDisplayName(event.target.value)}
+                            placeholder="Guest name (optional)"
+                            maxLength={32}
+                            disabled={socket == null || isAuthenticated}
+                        />
+                        <button
+                            type="submit"
+                            disabled={socket == null || isAuthenticated}
+                        >
+                            Set
+                        </button>
+                    </form>
+                    <form className="auth-form" onSubmit={handleLoginSubmit}>
+                        <label className="user-label" htmlFor="login-username">Login</label>
+                        <input
+                            id="login-username"
+                            type="text"
+                            value={loginUsername}
+                            onChange={(event) => setLoginUsername(event.target.value)}
+                            placeholder="Username"
+                            maxLength={32}
+                            autoComplete="username"
+                            disabled={socket == null || isAuthenticated}
+                        />
+                        <label className="user-label" htmlFor="login-password">Password</label>
+                        <input
+                            id="login-password"
+                            type="password"
+                            value={loginPassword}
+                            onChange={(event) => setLoginPassword(event.target.value)}
+                            placeholder="Password"
+                            minLength={MIN_PASSWORD_LENGTH}
+                            maxLength={128}
+                            autoComplete="current-password"
+                            disabled={socket == null || isAuthenticated}
+                        />
+                        <div className="auth-actions">
+                            <button
+                                type="submit"
+                                disabled={!authReady || isAuthenticated}
+                            >
+                                Log in
+                            </button>
+                            <button
+                                type="button"
+                                onClick={handleRegister}
+                                disabled={!authReady || isAuthenticated}
+                            >
+                                Register
+                            </button>
+                            {isAuthenticated ? (
+                                <button type="button" onClick={handleLogout}>
+                                    Log out
+                                </button>
+                            ) : null}
+                        </div>
+                        {authError ? (
+                            <span className="auth-error">{authError}</span>
+                        ) : null}
+                    </form>
+                </div>
                 <div className="user-list">
                     {users.length === 0 ? (
                         <span className="user-empty">No active users</span>

@@ -1,5 +1,6 @@
 const jwt = require("jsonwebtoken")
 const bcrypt = require("bcryptjs")
+const crypto = require("crypto")
 const { MongoClient, ObjectId } = require("mongodb")
 const io = require("socket.io")(3001, {
     cors: {
@@ -14,12 +15,19 @@ const MONGODB_DB = process.env.MONGODB_DB || "doceditor"
 const BCRYPT_ROUNDS =
     Number.parseInt(process.env.BCRYPT_ROUNDS || "10", 10) || 10
 const MIN_PASSWORD_LENGTH = 8
+const RESET_TOKEN_BYTES =
+    Number.parseInt(process.env.RESET_TOKEN_BYTES || "32", 10) || 32
+const RESET_TOKEN_TTL_MINUTES =
+    Number.parseInt(process.env.RESET_TOKEN_TTL_MINUTES || "30", 10) || 30
+const RESET_TOKEN_DELIVERY = process.env.RESET_TOKEN_DELIVERY || "socket"
+const RESET_BASE_URL = process.env.RESET_BASE_URL || ""
 
 const documents = new Map()
 const mongoState = {
     client: null,
     db: null,
     users: null,
+    resetTokens: null,
     ready: null,
 }
 
@@ -87,10 +95,23 @@ const connectMongo = async () => {
             mongoState.client = client
             mongoState.db = client.db(MONGODB_DB)
             mongoState.users = mongoState.db.collection("users")
-            return mongoState.users.createIndex(
-                { usernameLower: 1 },
-                { unique: true }
-            )
+            mongoState.resetTokens =
+                mongoState.db.collection("password_reset_tokens")
+            return Promise.all([
+                mongoState.users.createIndex(
+                    { usernameLower: 1 },
+                    { unique: true }
+                ),
+                mongoState.resetTokens.createIndex(
+                    { tokenHash: 1 },
+                    { unique: true }
+                ),
+                mongoState.resetTokens.createIndex(
+                    { expiresAt: 1 },
+                    { expireAfterSeconds: 0 }
+                ),
+                mongoState.resetTokens.createIndex({ userId: 1 }),
+            ])
         })
         .then(() => mongoState)
         .catch((error) => {
@@ -107,9 +128,31 @@ const getUsersCollection = async () => {
     return users
 }
 
+const getResetTokensCollection = async () => {
+    const { resetTokens } = await connectMongo()
+    return resetTokens
+}
+
 const getUserById = async (users, userId) => {
     if (!userId || !ObjectId.isValid(userId)) return null
     return users.findOne({ _id: new ObjectId(userId) })
+}
+
+const hashResetToken = (token) => {
+    return crypto.createHash("sha256").update(token).digest("hex")
+}
+
+const buildResetUrl = (token) => {
+    if (!RESET_BASE_URL) return ""
+    const separator = RESET_BASE_URL.includes("?") ? "&" : "?"
+    return `${RESET_BASE_URL}${separator}token=${token}`
+}
+
+const createResetToken = () => {
+    const token = crypto.randomBytes(RESET_TOKEN_BYTES).toString("hex")
+    const tokenHash = hashResetToken(token)
+    const expiresAt = new Date(Date.now() + RESET_TOKEN_TTL_MINUTES * 60 * 1000)
+    return { token, tokenHash, expiresAt }
 }
 
 const removeUserFromDocument = (documentID, socketId) => {
@@ -258,6 +301,174 @@ io.on("connection", socket => {
         } catch (error) {
             console.error("Auth login failed:", error)
             socket.emit("auth-error", { message: "Login failed." })
+        }
+    })
+
+    socket.on("auth-request-password-reset", async (payload = {}) => {
+        const username = normalizeUsername(payload.username)
+        if (!username) {
+            socket.emit("auth-error", { message: "Username required." })
+            return
+        }
+
+        let users
+        let resetTokens
+        try {
+            users = await getUsersCollection()
+            resetTokens = await getResetTokensCollection()
+        } catch (error) {
+            socket.emit("auth-error", { message: "Database unavailable." })
+            return
+        }
+
+        try {
+            const user = await users.findOne({
+                usernameLower: normalizeUsernameKey(username),
+            })
+
+            if (!user) {
+                socket.emit("auth-reset-requested", {
+                    message: "If that account exists, a reset link was sent.",
+                })
+                return
+            }
+
+            let tokenData = null
+            for (let attempt = 0; attempt < 3; attempt += 1) {
+                const candidate = createResetToken()
+                try {
+                    await resetTokens.insertOne({
+                        userId: user._id,
+                        tokenHash: candidate.tokenHash,
+                        createdAt: new Date(),
+                        expiresAt: candidate.expiresAt,
+                        usedAt: null,
+                    })
+                    tokenData = candidate
+                    break
+                } catch (error) {
+                    if (error && error.code === 11000) {
+                        continue
+                    }
+                    throw error
+                }
+            }
+
+            if (!tokenData) {
+                socket.emit("auth-error", {
+                    message: "Reset token generation failed.",
+                })
+                return
+            }
+
+            if (RESET_TOKEN_DELIVERY === "log") {
+                console.log(
+                    `Password reset token for ${user.username}: ${tokenData.token}`
+                )
+            }
+
+            const resetUrl = buildResetUrl(tokenData.token)
+            const response = {
+                message: "If that account exists, a reset link was sent.",
+            }
+
+            if (RESET_TOKEN_DELIVERY === "socket") {
+                response.resetToken = tokenData.token
+            }
+
+            if (resetUrl) {
+                response.resetUrl = resetUrl
+            }
+
+            socket.emit("auth-reset-requested", response)
+        } catch (error) {
+            console.error("Password reset request failed:", error)
+            socket.emit("auth-error", { message: "Reset request failed." })
+        }
+    })
+
+    socket.on("auth-reset-password", async (payload = {}) => {
+        const rawToken =
+            typeof payload.token === "string" ? payload.token.trim() : ""
+        const newPassword = validatePassword(payload.newPassword)
+
+        if (!rawToken || !newPassword) {
+            socket.emit("auth-error", {
+                message: "Reset token and new password required.",
+            })
+            return
+        }
+
+        let users
+        let resetTokens
+        try {
+            users = await getUsersCollection()
+            resetTokens = await getResetTokensCollection()
+        } catch (error) {
+            socket.emit("auth-error", { message: "Database unavailable." })
+            return
+        }
+
+        try {
+            const tokenHash = hashResetToken(rawToken)
+            const resetDoc = await resetTokens.findOne({ tokenHash })
+            const now = new Date()
+
+            if (!resetDoc || resetDoc.usedAt || resetDoc.expiresAt <= now) {
+                socket.emit("auth-error", {
+                    message: "Reset token invalid or expired.",
+                })
+                return
+            }
+
+            const user = await users.findOne({ _id: resetDoc.userId })
+            if (!user) {
+                socket.emit("auth-error", { message: "Account not found." })
+                return
+            }
+
+            const samePassword = await bcrypt.compare(
+                newPassword,
+                user.passwordHash
+            )
+            if (samePassword) {
+                socket.emit("auth-error", {
+                    message: "New password must be different.",
+                })
+                return
+            }
+
+            const passwordHash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS)
+            await users.updateOne(
+                { _id: user._id },
+                {
+                    $set: {
+                        passwordHash,
+                        passwordUpdatedAt: new Date(),
+                        lastPasswordResetAt: new Date(),
+                    },
+                }
+            )
+            await resetTokens.updateOne(
+                { _id: resetDoc._id },
+                { $set: { usedAt: new Date() } }
+            )
+            await resetTokens.deleteMany({
+                userId: user._id,
+                _id: { $ne: resetDoc._id },
+            })
+
+            const userId = user._id.toString()
+            const token = issueToken({ username: user.username, userId })
+            socket.data.username = user.username
+            socket.data.userId = userId
+            socket.data.authToken = token
+            syncUserFromSocket(socket)
+            emitAuthToken(socket, { token, username: user.username, userId })
+            socket.emit("auth-success", { message: "Password reset." })
+        } catch (error) {
+            console.error("Password reset failed:", error)
+            socket.emit("auth-error", { message: "Password reset failed." })
         }
     })
 

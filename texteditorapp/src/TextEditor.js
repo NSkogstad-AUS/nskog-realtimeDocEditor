@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import Quill from "quill"
 import "quill/dist/quill.snow.css"
 import { io } from 'socket.io-client'
@@ -30,6 +30,7 @@ export default function TextEditor() {
     const [loginPassword, setLoginPassword] = useState("")
     const [authUserId, setAuthUserId] = useState(null)
     const [authError, setAuthError] = useState("")
+    const saveTimerRef = useRef(null)
 
 
     useEffect(() => {
@@ -145,12 +146,26 @@ export default function TextEditor() {
         const handler = (delta, oldDelta, source) => {
             if (source !== 'user') return
             socket.emit('send-changes', delta)
+
+            if (saveTimerRef.current) {
+                clearTimeout(saveTimerRef.current)
+            }
+
+            saveTimerRef.current = setTimeout(() => {
+                socket.emit("save-document", {
+                    data: quill.getContents(),
+                })
+            }, 800)
         }
 
         quill.on('text-change', handler)
 
         return () => {
             quill.off('text-change', handler)
+            if (saveTimerRef.current) {
+                clearTimeout(saveTimerRef.current)
+                saveTimerRef.current = null
+            }
         }
     }, [socket, quill])
 

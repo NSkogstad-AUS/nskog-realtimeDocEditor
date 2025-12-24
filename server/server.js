@@ -28,16 +28,17 @@ const mongoState = {
     db: null,
     users: null,
     resetTokens: null,
+    documents: null,
     ready: null,
 }
 
-const createDocument = () => ({
-    data: "",
+const createDocument = (data = { ops: [] }) => ({
+    data,
     nextGuestNumber: 1,
     users: new Map(),
 })
 
-const getDocument = (documentID) => {
+const getDocumentFromMemory = (documentID) => {
     if (!documents.has(documentID)) {
         documents.set(documentID, createDocument())
     }
@@ -97,6 +98,7 @@ const connectMongo = async () => {
             mongoState.users = mongoState.db.collection("users")
             mongoState.resetTokens =
                 mongoState.db.collection("password_reset_tokens")
+            mongoState.documents = mongoState.db.collection("documents")
             return Promise.all([
                 mongoState.users.createIndex(
                     { usernameLower: 1 },
@@ -111,6 +113,7 @@ const connectMongo = async () => {
                     { expireAfterSeconds: 0 }
                 ),
                 mongoState.resetTokens.createIndex({ userId: 1 }),
+                mongoState.documents.createIndex({ updatedAt: 1 }),
             ])
         })
         .then(() => mongoState)
@@ -126,6 +129,11 @@ const connectMongo = async () => {
 const getUsersCollection = async () => {
     const { users } = await connectMongo()
     return users
+}
+
+const getDocumentsCollection = async () => {
+    const { documents: documentsCollection } = await connectMongo()
+    return documentsCollection
 }
 
 const getResetTokensCollection = async () => {
@@ -153,6 +161,27 @@ const createResetToken = () => {
     const tokenHash = hashResetToken(token)
     const expiresAt = new Date(Date.now() + RESET_TOKEN_TTL_MINUTES * 60 * 1000)
     return { token, tokenHash, expiresAt }
+}
+
+const loadDocument = async (documentID) => {
+    if (documents.has(documentID)) {
+        return documents.get(documentID)
+    }
+
+    let data = { ops: [] }
+    try {
+        const documentsCollection = await getDocumentsCollection()
+        const stored = await documentsCollection.findOne({ _id: documentID })
+        if (stored && stored.data) {
+            data = stored.data
+        }
+    } catch (error) {
+        console.error("Document load failed:", error)
+    }
+
+    const document = createDocument(data)
+    documents.set(documentID, document)
+    return document
 }
 
 const removeUserFromDocument = (documentID, socketId) => {
@@ -592,7 +621,8 @@ io.on("connection", socket => {
         })
     })
 
-    socket.on("get-document", documentID => {
+    socket.on("get-document", async (documentID) => {
+        if (typeof documentID !== "string" || !documentID.trim()) return
         const previousDocumentID = socket.data.documentID
         if (previousDocumentID && previousDocumentID !== documentID) {
             removeUserFromDocument(previousDocumentID, socket.id)
@@ -600,7 +630,7 @@ io.on("connection", socket => {
         }
 
         socket.data.documentID = documentID
-        const document = getDocument(documentID)
+        const document = await loadDocument(documentID)
 
         if (!document.users.has(socket.id)) {
             document.users.set(socket.id, {
@@ -622,6 +652,28 @@ io.on("connection", socket => {
         const documentID = socket.data.documentID
         if (!documentID) return
         socket.broadcast.to(documentID).emit("receive-changes", delta)
+    })
+
+    socket.on("save-document", async (payload = {}) => {
+        const documentID = socket.data.documentID
+        if (!documentID) return
+        if (!payload || typeof payload !== "object") return
+        const data = payload.data
+        if (!data) return
+
+        const document = getDocumentFromMemory(documentID)
+        document.data = data
+
+        try {
+            const documentsCollection = await getDocumentsCollection()
+            await documentsCollection.updateOne(
+                { _id: documentID },
+                { $set: { data, updatedAt: new Date() } },
+                { upsert: true }
+            )
+        } catch (error) {
+            console.error("Document save failed:", error)
+        }
     })
 
     socket.on("set-username", username => {
